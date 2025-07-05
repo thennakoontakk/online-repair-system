@@ -1,109 +1,115 @@
-import { rtdb } from '../firebase';
-import { ref, query, orderByChild, equalTo, onValue } from 'firebase/database';
-import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../AuthContext';
+import React, { useEffect, useState } from 'react';
+import { getDatabase, ref, onValue, push, remove } from 'firebase/database';
+import { app } from '../firebase';
+import { getAuth } from 'firebase/auth';
+import RequestForm from '../components/RequestForm';
 
-const UserDashboard = () => {
-  const navigate = useNavigate();
-  const { currentUser } = useAuth();
-  const [requests, setRequests] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
+function UserDashboard() {
+  const [userRequests, setUserRequests] = useState([]);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
+  const auth = getAuth(app);
+  const database = getDatabase(app);
 
   useEffect(() => {
-    if (!currentUser) {
-      setLoading(false);
-      return;
-    }
-
-    const requestsRef = ref(rtdb, 'requests');
-    const q = query(
-      requestsRef,
-      orderByChild('userId'),
-      equalTo(currentUser.uid)
-    );
-
-    const unsubscribe = onValue(q, (snapshot) => {
-      const fetchedRequests = [];
-      snapshot.forEach((childSnapshot) => {
-        fetchedRequests.push({
-          id: childSnapshot.key,
-          ...childSnapshot.val()
-        });
+    const currentUser = auth.currentUser;
+    if (currentUser) {
+      const requestsRef = ref(database, 'requests');
+      onValue(requestsRef, (snapshot) => {
+        const data = snapshot.val();
+        if (data) {
+          const requestsList = Object.keys(data).map(key => ({
+            id: key,
+            ...data[key]
+          })).filter(request => request.userId === currentUser.uid);
+          setUserRequests(requestsList);
+        } else {
+          setUserRequests([]);
+        }
       });
-      setRequests(fetchedRequests.filter(req => req.userId === currentUser.uid).reverse()); // Filter by userId and then reverse for createdAt desc order
-      setLoading(false);
-    }, (err) => {
-      setError(err.message);
-      setLoading(false);
-    });
+    }
+  }, [auth, database]);
 
-    return () => unsubscribe();
-  }, [currentUser]);
+  const handleAddRequest = async (newRequest) => {
+    try {
+      const currentUser = auth.currentUser;
+      if (currentUser) {
+        await push(ref(database, 'requests'), { ...newRequest, userId: currentUser.uid, date: new Date().toISOString().split('T')[0], status: 'Pending' });
+        alert('Request added successfully!');
+        setIsModalOpen(false);
+      } else {
+        alert('You must be logged in to add a request.');
+      }
+    } catch (error) {
+      console.error('Error adding request:', error);
+      alert('Failed to add request.');
+    }
+  };
 
-  if (loading) {
-    return <div className="UserDashboard-container">Loading requests...</div>;
-  }
-
-  if (error) {
-    return <div className="UserDashboard-container">Error: {error}</div>;
-  }
+  const handleDeleteRequest = async (id) => {
+    if (window.confirm('Are you sure you want to delete this request?')) {
+      try {
+        await remove(ref(database, `requests/${id}`));
+        alert('Request deleted successfully!');
+      } catch (error) {
+        console.error('Error deleting request:', error);
+        alert('Failed to delete request.');
+      }
+    }
+  };
 
   return (
-    <div className="UserDashboard-container">
-            <div style={styles.headerContainer}>
-        <h2>My Repair Requests</h2>
-        <button style={styles.createButton} onClick={() => navigate('/request-form')}>Create New Request</button>
-      </div>
-      {requests.length === 0 ? (
-        <p>No repair requests submitted yet.</p>
-      ) : (
-        <div className="requests-list" style={styles.requestsList}>
-          {requests.map((request) => (
-            <div key={request.id} style={styles.requestCard}>
-              <h3>Request ID: {request.id}</h3>
-              <p><strong>Device Type:</strong> {request.deviceType}</p>
-              <p><strong>Problem:</strong> {request.problemDescription}</p>
-              <p><strong>Status:</strong> {request.status}</p>
-              <p><strong>Submitted On:</strong> {new Date(request.createdAt).toLocaleString()}</p>
-              {/* Add more details as needed, e.g., image, notes */}
-            </div>
-          ))}
-        </div>
+    <div className="user-dashboard">
+      <h1>User Dashboard</h1>
+
+      <button onClick={() => setIsModalOpen(true)} className="button primary">
+        Add New Request
+      </button>
+
+      {isModalOpen && (
+        <RequestForm
+          onSave={handleAddRequest}
+          onClose={() => setIsModalOpen(false)}
+        />
       )}
+
+      <section className="your-requests">
+        <h2>Your Submitted Requests</h2>
+        {userRequests.length > 0 ? (
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Description</th>
+                <th>Device Type</th>
+                <th>Status</th>
+                <th>Priority</th>
+                <th>Assigned To</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {userRequests.map(request => (
+                <tr key={request.id}>
+                  <td>{request.date}</td>
+                  <td>{request.description}</td>
+                  <td>{request.deviceType}</td>
+                  <td>{request.status}</td>
+                  <td>{request.priority}</td>
+                  <td>{request.assignedTo || 'N/A'}</td>
+                  <td>
+                    <button onClick={() => handleDeleteRequest(request.id)} className="button delete-button">Delete</button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        ) : (
+          <p>No requests submitted yet.</p>
+        )}
+      </section>
     </div>
   );
-};
-
-const styles = {
-  headerContainer: {
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    marginBottom: '20px',
-  },
-  createButton: {
-    padding: '10px 20px',
-    backgroundColor: '#007bff',
-    color: 'white',
-    border: 'none',
-    borderRadius: '5px',
-    cursor: 'pointer',
-    fontSize: '16px',
-  },
-  requestsList: {
-    display: 'flex',
-    flexWrap: 'wrap',
-    gap: '20px',
-    justifyContent: 'center',
-  },
-  requestCard: {
-    border: '1px solid #ddd',
-    borderRadius: '8px',
-    padding: '20px',
-    width: '300px',
-    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
-  },
-};
+}
 
 export default UserDashboard;
